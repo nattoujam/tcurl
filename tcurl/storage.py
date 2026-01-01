@@ -58,6 +58,23 @@ def load_request_sets() -> List[RequestSet]:
     return request_sets
 
 
+def load_config() -> Dict[str, Any]:
+    ensure_storage()
+    if not CONFIG_PATH.exists():
+        return {}
+    with CONFIG_PATH.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    return data if isinstance(data, dict) else {}
+
+
+def get_editor_command() -> str:
+    config = load_config()
+    editor = config.get("editor")
+    if isinstance(editor, str) and editor.strip():
+        return editor.strip()
+    return "vim"
+
+
 def create_request_set(name: Optional[str] = None) -> RequestSet:
     ensure_storage()
     file_path = _next_request_path()

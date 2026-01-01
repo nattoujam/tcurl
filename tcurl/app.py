@@ -8,6 +8,7 @@ from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, S
 
 from tcurl.models import RequestSet
 from tcurl.storage import create_request_set, delete_request_set, load_request_sets
+from tcurl.utils.editor import open_in_editor
 
 
 class RequestListWidget(ListView):
@@ -92,6 +93,7 @@ class TcurlApp(App):
         ("q", "quit", "Quit"),
         ("n", "new_request", "New"),
         ("d", "delete_request", "Delete"),
+        ("e", "edit_request", "Edit"),
     ]
 
     CSS = """
@@ -164,6 +166,20 @@ class TcurlApp(App):
             lambda confirmed: self._delete_request(request_set, confirmed),
         )
 
+    def action_edit_request(self) -> None:
+        if not self.request_sets:
+            return
+        request_list = self.query_one(RequestListWidget)
+        if request_list.highlighted_child is None:
+            return
+        if request_list.index >= len(self.request_sets):
+            return
+        request_set = self.request_sets[request_list.index]
+        if request_set.file_path is None:
+            return
+        self._open_editor(request_set.file_path)
+        self._reload_request_list(select_path=request_set.file_path)
+
     def _show_request_details(self, request_set: Optional[RequestSet]) -> None:
         detail_panel = self.query_one(DetailPanelWidget)
         if request_set is None:
@@ -176,6 +192,17 @@ class TcurlApp(App):
             return
         delete_request_set(request_set)
         self._reload_request_list()
+
+    def _open_editor(self, path: Path) -> None:
+        if self._driver is None:
+            open_in_editor(path)
+            return
+        self._driver.stop_application_mode()
+        try:
+            open_in_editor(path)
+        finally:
+            self._driver.start_application_mode()
+            self.refresh(layout=True)
 
     def _reload_request_list(self, select_path: Optional[Path] = None) -> None:
         request_list = self.query_one(RequestListWidget)
