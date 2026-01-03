@@ -1,12 +1,14 @@
+import json
 from pathlib import Path
 from typing import Optional
 
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Static
 
-from tcurl.models import RequestSet
+from tcurl.http_client import execute_request
+from tcurl.models import RequestSet, Response
 from tcurl.storage.requests import (
     create_request_set,
     delete_request_set,
@@ -16,15 +18,106 @@ from tcurl.utils.editor import open_in_editor
 
 
 class RequestListWidget(ListView):
-    """Left panel for request sets."""
+    can_focus = True
     BINDINGS = [
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
     ]
+    DEFAULT_CSS = """
+    RequestListWidget {
+        width: 30%;
+        border: solid green;
+    }
+
+    RequestListWidget:focus {
+        border: solid yellow;
+    }
+    """
 
 
 class DetailPanelWidget(Static):
-    """Right panel for request details and response."""
+    can_focus = True
+    DEFAULT_CSS = """
+    DetailPanelWidget {
+        border: solid blue;
+        padding: 1 2;
+    }
+
+    DetailPanelWidget:focus {
+        border: solid yellow;
+    }
+    """
+
+
+class ResponsePanelWidget(VerticalScroll):
+    can_focus = True
+    DEFAULT_CSS = """
+    ResponsePanelWidget {
+        border: solid cyan;
+        padding: 1 2;
+    }
+
+    ResponsePanelWidget:focus {
+        border: solid yellow;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="response-content")
+
+    def set_content(self, response: Optional[Response]) -> None:
+        self.query_one("#response-content", Static).update(
+            self._format_response_details(response)
+        )
+
+    def _format_response_details(self, response: Optional[Response]) -> str:
+        if response is None:
+            return "Response\n\n(not run)"
+        if response.note:
+            return f"Response\n\n{response.note}"
+        if response.error:
+            return f"Response\n\nError: {response.error}"
+        body_text = self._format_response_body(response)
+        status_line = "Status: (unknown)"
+        if response.status_code is not None:
+            reason = f" {response.reason}" if response.reason else ""
+            elapsed = ""
+            if response.elapsed_ms is not None:
+                elapsed = f" ({response.elapsed_ms:.0f} ms)"
+            status_line = f"Status: {response.status_code}{reason}{elapsed}"
+        headers_text = "\n".join(
+            f"{key}: {value}" for key, value in (response.headers or {}).items()
+        )
+        if not headers_text:
+            headers_text = "(none)"
+        return (
+            "Response\n\n"
+            f"{status_line}\n\n"
+            "[Headers]\n"
+            f"{headers_text}\n\n"
+            "[Body]\n"
+            f"{body_text}"
+        )
+
+    def _format_response_body(self, response: Response) -> str:
+        body_text = response.body if response.body else ""
+        if body_text:
+            content_type = ""
+            if response.headers:
+                content_type = response.headers.get("Content-Type", "")
+            should_format_json = "application/json" in content_type.lower()
+            if should_format_json or body_text.strip().startswith(("{", "[")):
+                try:
+                    body_text = json.dumps(
+                        json.loads(body_text), indent=2, ensure_ascii=True
+                    )
+                except json.JSONDecodeError:
+                    pass
+        if not body_text:
+            body_text = "(empty)"
+        if len(body_text) > 4000:
+            body_text = body_text[:4000] + "\n... (truncated)"
+        return body_text
 
 
 class ConfirmDeleteScreen(ModalScreen[bool]):
@@ -102,6 +195,9 @@ class TcurlApp(App):
         ("n", "new_request", "New"),
         ("d", "delete_request", "Delete"),
         ("e", "edit_request", "Edit"),
+        ("enter", "run_request", "Run"),
+        ("tab", "focus_next", "Next"),
+        ("shift+tab", "focus_previous", "Prev"),
     ]
 
     CSS = """
@@ -113,28 +209,36 @@ class TcurlApp(App):
         height: 1fr;
     }
 
-    #request-list {
-        width: 30%;
-        border: solid green;
+    #right-panel {
+        width: 70%;
+        layout: vertical;
+        height: 1fr;
     }
 
     #detail-panel {
-        width: 70%;
-        border: solid blue;
-        padding: 1 2;
+        height: 1fr;
+    }
+
+    #response-panel {
+        height: 1fr;
     }
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.request_sets: list[RequestSet] = []
+        self.responses: dict[str, Response] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Container(
             Horizontal(
                 RequestListWidget(id="request-list"),
-                DetailPanelWidget(id="detail-panel"),
+                Container(
+                    DetailPanelWidget(id="detail-panel"),
+                    ResponsePanelWidget(id="response-panel"),
+                    id="right-panel",
+                ),
                 id="main",
             )
         )
@@ -155,20 +259,21 @@ class TcurlApp(App):
             return
         self._show_request_details(self.request_sets[list_view.index])
 
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if not self.request_sets:
+            return
+        if event.control.index >= len(self.request_sets):
+            return
+        await self.action_run_request()
+
     def action_new_request(self) -> None:
         created = create_request_set()
         self._reload_request_list(select_path=created.file_path)
 
     def action_delete_request(self) -> None:
-        if not self.request_sets:
+        request_set = self._get_selected_request_set()
+        if request_set is None:
             return
-        request_list = self.query_one(RequestListWidget)
-        if request_list.highlighted_child is None:
-            return
-        if request_list.index >= len(self.request_sets):
-            return
-
-        request_set = self.request_sets[request_list.index]
         message = f"{request_set.name}を削除しますか？ (y/n)"
         self.push_screen(
             ConfirmDeleteScreen(message),
@@ -176,25 +281,39 @@ class TcurlApp(App):
         )
 
     def action_edit_request(self) -> None:
-        if not self.request_sets:
+        request_set = self._get_selected_request_set()
+        if request_set is None:
             return
-        request_list = self.query_one(RequestListWidget)
-        if request_list.highlighted_child is None:
-            return
-        if request_list.index >= len(self.request_sets):
-            return
-        request_set = self.request_sets[request_list.index]
         if request_set.file_path is None:
             return
         self._open_editor(request_set.file_path)
         self._reload_request_list(select_path=request_set.file_path)
 
+    async def action_run_request(self) -> None:
+        request_set = self._get_selected_request_set()
+        if request_set is None:
+            return
+        self.responses[self._response_key(request_set)] = Response(
+            note="Running..."
+        )
+        self._show_request_details(request_set)
+        self.responses[self._response_key(request_set)] = await execute_request(
+            request_set
+        )
+        if self._is_selected(request_set):
+            self._show_request_details(request_set)
+
     def _show_request_details(self, request_set: Optional[RequestSet]) -> None:
         detail_panel = self.query_one(DetailPanelWidget)
+        response_panel = self.query_one(ResponsePanelWidget)
         if request_set is None:
             detail_panel.update("Request Details\n\n(No request selected)")
+            response_panel.set_content(None)
             return
         detail_panel.update(self._format_request_details(request_set))
+        response_panel.set_content(
+            self.responses.get(self._response_key(request_set))
+        )
 
     def _delete_request(self, request_set: RequestSet, confirmed: Optional[bool]) -> None:
         if not confirmed:
@@ -232,6 +351,25 @@ class TcurlApp(App):
             selected_index = 0
         request_list.index = selected_index
         self._show_request_details(self.request_sets[selected_index])
+
+    def _get_selected_request_set(self) -> Optional[RequestSet]:
+        if not self.request_sets:
+            return None
+        request_list = self.query_one(RequestListWidget)
+        if request_list.highlighted_child is None:
+            return None
+        if request_list.index >= len(self.request_sets):
+            return None
+        return self.request_sets[request_list.index]
+
+    def _is_selected(self, request_set: RequestSet) -> bool:
+        selected = self._get_selected_request_set()
+        return selected is request_set
+
+    def _response_key(self, request_set: RequestSet) -> str:
+        if request_set.file_path is not None:
+            return str(request_set.file_path)
+        return request_set.name
 
     def _format_request_details(self, request_set: RequestSet) -> str:
         headers_text = "\n".join(

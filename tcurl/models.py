@@ -25,3 +25,14 @@ class RequestSet:
     def __post_init__(self) -> None:
         if self.variables is None:
             self.variables = []
+
+
+@dataclass
+class Response:
+    status_code: Optional[int] = None
+    reason: Optional[str] = None
+    headers: Optional[Dict[str, str]] = None
+    body: str = ""
+    elapsed_ms: Optional[float] = None
+    error: Optional[str] = None
+    note: Optional[str] = None
