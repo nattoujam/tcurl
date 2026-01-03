@@ -4,16 +4,13 @@ from typing import Optional
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Static
 
 from tcurl.http_client import execute_request
 from tcurl.models import RequestSet, Response
-from tcurl.storage.requests import (
-    create_request_set,
-    delete_request_set,
-    load_request_sets,
-)
+from tcurl.store import RequestSetStore
 from tcurl.utils.editor import open_in_editor
 
 
@@ -22,6 +19,10 @@ class RequestListWidget(ListView):
     BINDINGS = [
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        ("n", "new_request", "New"),
+        ("d", "delete_request", "Delete"),
+        ("e", "edit_request", "Edit"),
+        ("enter", "run_request", "Run"),
     ]
     DEFAULT_CSS = """
     RequestListWidget {
@@ -33,6 +34,92 @@ class RequestListWidget(ListView):
         border: solid yellow;
     }
     """
+
+    class RunRequested(Message):
+        def __init__(self, request_set: RequestSet) -> None:
+            super().__init__()
+            self.request_set = request_set
+
+    def __init__(self, store: RequestSetStore, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.store = store
+        self.request_sets: list[RequestSet] = []
+        self.store.subscribe_items(self._on_items_change)
+        self.store.subscribe_selection(self._on_selection_change)
+
+    def _on_items_change(self, select_set: Optional[RequestSet]) -> None:
+        self.clear()
+        self.request_sets = self.store.items
+        if not self.request_sets:
+            self.append(ListItem(Label("no requests found")))
+            return
+
+        selected_index: Optional[int] = None
+        for index, request_set in enumerate(self.request_sets):
+            self.append(ListItem(Label(request_set.name)))
+            if select_set is not None and request_set == select_set:
+                selected_index = index
+
+        if selected_index is None:
+            selected_index = 0
+        self.index = selected_index
+
+    def _on_selection_change(self, select_set: Optional[RequestSet]) -> None:
+        if not self.request_sets or select_set is None:
+            return
+        for index, request_set in enumerate(self.request_sets):
+            if request_set == select_set:
+                self.index = index
+                break
+
+    def get_selected_request_set(self) -> Optional[RequestSet]:
+        return self.store.get_selected()
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if self.index is None:
+            return
+        if self.index < 0 or self.index >= len(self.request_sets):
+            return
+        self.store.set_selected(self.request_sets[self.index])
+
+    def action_new_request(self) -> None:
+        self.store.create()
+
+    def action_delete_request(self) -> None:
+        request_set = self.store.get_selected()
+        if request_set is None:
+            return
+        self.app.push_screen(ConfirmDeleteScreen(request_set, self.store.delete))
+
+    def action_edit_request(self) -> None:
+        request_set = self.store.get_selected()
+        if request_set is None:
+            return
+        if request_set.file_path is None:
+            return
+        self._open_editor(request_set.file_path)
+        self.store.refresh(select_set=request_set)
+
+    def action_run_request(self) -> None:
+        request_set = self.store.get_selected()
+        if request_set is None:
+            return
+        self.post_message(self.RunRequested(request_set))
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        self.action_run_request()
+
+    def _open_editor(self, path: Path) -> None:
+        app = self.app
+        if app is None or app._driver is None:
+            open_in_editor(path)
+            return
+        app._driver.stop_application_mode()
+        try:
+            open_in_editor(path)
+        finally:
+            app._driver.start_application_mode()
+            app.refresh(layout=True)
 
 
 class DetailPanelWidget(Static):
@@ -47,6 +134,32 @@ class DetailPanelWidget(Static):
         border: solid yellow;
     }
     """
+
+    def set_content(self, request_set: Optional[RequestSet]) -> None:
+        if request_set is None:
+            self.update("Request Details\n\n(No request selected)")
+            return
+        self.update(self._format_request_details(request_set))
+
+    def _format_request_details(self, request_set: RequestSet) -> str:
+        headers_text = "\n".join(
+            f"{key}: {value}" for key, value in request_set.headers.items()
+        )
+        if not headers_text:
+            headers_text = "(none)"
+        body_text = request_set.body if request_set.body else "(empty)"
+        description = request_set.description if request_set.description else "-"
+        return (
+            "Request Details\n\n"
+            f"Name: {request_set.name}\n"
+            f"Method: {request_set.method}\n"
+            f"URL: {request_set.url}\n"
+            f"Description: {description}\n\n"
+            "[Headers]\n"
+            f"{headers_text}\n\n"
+            "[Body]\n"
+            f"{body_text}"
+        )
 
 
 class ResponsePanelWidget(VerticalScroll):
@@ -161,13 +274,15 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
         ("escape", "cancel", "No"),
     ]
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, request_set: RequestSet, on_confirm) -> None:
         super().__init__()
-        self.message = message
+        self.request_set = request_set
+        self.on_confirm = on_confirm
 
     def compose(self) -> ComposeResult:
+        message = f"{self.request_set.name}を削除しますか？ (y/n)"
         yield Container(
-            Static(self.message, id="confirm-message"),
+            Static(message, id="confirm-message"),
             Horizontal(
                 Button("Yes", id="confirm-yes"),
                 Button("No", id="confirm-no"),
@@ -183,6 +298,7 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
             self.dismiss(False)
 
     def action_confirm(self) -> None:
+        self.on_confirm(self.request_set)
         self.dismiss(True)
 
     def action_cancel(self) -> None:
@@ -192,10 +308,6 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
 class TcurlApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
-        ("n", "new_request", "New"),
-        ("d", "delete_request", "Delete"),
-        ("e", "edit_request", "Edit"),
-        ("enter", "run_request", "Run"),
         ("tab", "focus_next", "Next"),
         ("shift+tab", "focus_previous", "Prev"),
     ]
@@ -226,14 +338,16 @@ class TcurlApp(App):
 
     def __init__(self) -> None:
         super().__init__()
-        self.request_sets: list[RequestSet] = []
-        self.responses: dict[str, Response] = {}
+        self.store = RequestSetStore()
+        self.store.subscribe_selection(self._on_selection_change)
+        self.detail_panel: Optional[DetailPanelWidget] = None
+        self.response_panel: Optional[ResponsePanelWidget] = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Container(
             Horizontal(
-                RequestListWidget(id="request-list"),
+                RequestListWidget(self.store, id="request-list"),
                 Container(
                     DetailPanelWidget(id="detail-panel"),
                     ResponsePanelWidget(id="response-panel"),
@@ -245,148 +359,37 @@ class TcurlApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self._reload_request_list()
-        self.query_one(RequestListWidget).focus()
+        request_list = self.query_one(RequestListWidget)
+        self.detail_panel = self.query_one(DetailPanelWidget)
+        self.response_panel = self.query_one(ResponsePanelWidget)
+        self.store.refresh()
+        request_list.focus()
 
-    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        if not self.request_sets:
-            return
-        list_view = event.control
-        if list_view.highlighted_child is None:
-            self._show_request_details(None)
-            return
-        if list_view.index >= len(self.request_sets):
-            return
-        self._show_request_details(self.request_sets[list_view.index])
-
-    async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if not self.request_sets:
-            return
-        if event.control.index >= len(self.request_sets):
-            return
-        await self.action_run_request()
-
-    def action_new_request(self) -> None:
-        created = create_request_set()
-        self._reload_request_list(select_path=created.file_path)
-
-    def action_delete_request(self) -> None:
-        request_set = self._get_selected_request_set()
-        if request_set is None:
-            return
-        message = f"{request_set.name}を削除しますか？ (y/n)"
-        self.push_screen(
-            ConfirmDeleteScreen(message),
-            lambda confirmed: self._delete_request(request_set, confirmed),
-        )
-
-    def action_edit_request(self) -> None:
-        request_set = self._get_selected_request_set()
-        if request_set is None:
-            return
-        if request_set.file_path is None:
-            return
-        self._open_editor(request_set.file_path)
-        self._reload_request_list(select_path=request_set.file_path)
-
-    async def action_run_request(self) -> None:
-        request_set = self._get_selected_request_set()
-        if request_set is None:
-            return
-        self.responses[self._response_key(request_set)] = Response(
-            note="Running..."
-        )
+    async def on_request_list_widget_run_requested(
+        self, message: RequestListWidget.RunRequested
+    ) -> None:
+        request_set = message.request_set
+        self.store.set_response(request_set, Response(note="Running..."))
         self._show_request_details(request_set)
-        self.responses[self._response_key(request_set)] = await execute_request(
-            request_set
-        )
+        response = await execute_request(request_set)
+        self.store.set_response(request_set, response)
         if self._is_selected(request_set):
             self._show_request_details(request_set)
 
     def _show_request_details(self, request_set: Optional[RequestSet]) -> None:
-        detail_panel = self.query_one(DetailPanelWidget)
-        response_panel = self.query_one(ResponsePanelWidget)
+        detail_panel = self.detail_panel
+        response_panel = self.response_panel
+        if detail_panel is None or response_panel is None:
+            return
         if request_set is None:
-            detail_panel.update("Request Details\n\n(No request selected)")
+            detail_panel.set_content(None)
             response_panel.set_content(None)
             return
-        detail_panel.update(self._format_request_details(request_set))
-        response_panel.set_content(
-            self.responses.get(self._response_key(request_set))
-        )
+        detail_panel.set_content(request_set)
+        response_panel.set_content(self.store.get_response(request_set))
 
-    def _delete_request(self, request_set: RequestSet, confirmed: Optional[bool]) -> None:
-        if not confirmed:
-            return
-        delete_request_set(request_set)
-        self._reload_request_list()
-
-    def _open_editor(self, path: Path) -> None:
-        if self._driver is None:
-            open_in_editor(path)
-            return
-        self._driver.stop_application_mode()
-        try:
-            open_in_editor(path)
-        finally:
-            self._driver.start_application_mode()
-            self.refresh(layout=True)
-
-    def _reload_request_list(self, select_path: Optional[Path] = None) -> None:
-        request_list = self.query_one(RequestListWidget)
-        request_list.clear()
-        self.request_sets = load_request_sets()
-        if not self.request_sets:
-            request_list.append(ListItem(Label("no requests found")))
-            self._show_request_details(None)
-            return
-
-        selected_index: Optional[int] = None
-        for index, request_set in enumerate(self.request_sets):
-            request_list.append(ListItem(Label(request_set.name)))
-            if select_path and request_set.file_path == select_path:
-                selected_index = index
-
-        if selected_index is None:
-            selected_index = 0
-        request_list.index = selected_index
-        self._show_request_details(self.request_sets[selected_index])
-
-    def _get_selected_request_set(self) -> Optional[RequestSet]:
-        if not self.request_sets:
-            return None
-        request_list = self.query_one(RequestListWidget)
-        if request_list.highlighted_child is None:
-            return None
-        if request_list.index >= len(self.request_sets):
-            return None
-        return self.request_sets[request_list.index]
+    def _on_selection_change(self, select_set: Optional[RequestSet]) -> None:
+        self._show_request_details(select_set)
 
     def _is_selected(self, request_set: RequestSet) -> bool:
-        selected = self._get_selected_request_set()
-        return selected is request_set
-
-    def _response_key(self, request_set: RequestSet) -> str:
-        if request_set.file_path is not None:
-            return str(request_set.file_path)
-        return request_set.name
-
-    def _format_request_details(self, request_set: RequestSet) -> str:
-        headers_text = "\n".join(
-            f"{key}: {value}" for key, value in request_set.headers.items()
-        )
-        if not headers_text:
-            headers_text = "(none)"
-        body_text = request_set.body if request_set.body else "(empty)"
-        description = request_set.description if request_set.description else "-"
-        return (
-            "Request Details\n\n"
-            f"Name: {request_set.name}\n"
-            f"Method: {request_set.method}\n"
-            f"URL: {request_set.url}\n"
-            f"Description: {description}\n\n"
-            "[Headers]\n"
-            f"{headers_text}\n\n"
-            "[Body]\n"
-            f"{body_text}"
-        )
+        return self.store.get_selected() is request_set
