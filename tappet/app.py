@@ -9,10 +9,10 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Static, TabbedContent, TabPane, Tab, Tabs
 
-from tcurl.http_client import execute_request
-from tcurl.models import RequestSet, Response
-from tcurl.store import RequestSetStore
-from tcurl.utils.editor import open_in_editor
+from tappet.http_client import execute_request
+from tappet.models import RequestSet, Response
+from tappet.store import RequestSetStore
+from tappet.utils.editor import open_in_editor
 
 
 class RequestListWidget(ListView):
@@ -315,6 +315,7 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
 
 class TcurlApp(App):
     CSS_PATH = "themes/default.css"
+    TITLE = "tappet"
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("tab", "focus_next", "Next"),

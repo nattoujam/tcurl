@@ -4,7 +4,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from tcurl.storage.config import get_editor_command
+from tappet.storage.config import get_editor_command
 
 
 def open_in_editor(path: Path) -> bool:

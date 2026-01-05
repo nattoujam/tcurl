@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from tcurl.models import RequestSet, Response
-from tcurl.storage.requests import create_request_set, delete_request_set, load_request_sets
+from tappet.models import RequestSet, Response
+from tappet.storage.requests import create_request_set, delete_request_set, load_request_sets
 
 
 StoreCallback = Callable[[Optional[RequestSet]], None]

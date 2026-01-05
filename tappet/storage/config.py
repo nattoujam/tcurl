@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 import yaml
 
-from tcurl.storage.paths import CONFIG_DIR, CONFIG_PATH
+from tappet.storage.paths import CONFIG_DIR, CONFIG_PATH
 
 DEFAULT_CONFIG = {
     "http": {"timeout": 10},

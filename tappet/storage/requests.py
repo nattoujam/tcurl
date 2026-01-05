@@ -5,9 +5,9 @@ from typing import Any, Dict, List
 
 import yaml
 
-from tcurl.models import RequestSet, Variable
-from tcurl.storage.config import ensure_config
-from tcurl.storage.paths import REQUESTS_DIR
+from tappet.models import RequestSet, Variable
+from tappet.storage.config import ensure_config
+from tappet.storage.paths import REQUESTS_DIR
 
 SAMPLE_REQUEST = {
     "name": "New Request",

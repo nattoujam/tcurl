@@ -1,11 +1,11 @@
 import click
 
-from tcurl.app import TcurlApp
+from tappet.app import TcurlApp
 
 
 @click.command()
 def main() -> None:
-    """Run the tcurl TUI application."""
+    """Run the tappet TUI application."""
     app = TcurlApp()
     app.run()
 

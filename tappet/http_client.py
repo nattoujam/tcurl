@@ -1,6 +1,6 @@
 import httpx
 
-from tcurl.models import RequestSet, Response
+from tappet.models import RequestSet, Response
 
 
 async def execute_request(request_set: RequestSet) -> Response:

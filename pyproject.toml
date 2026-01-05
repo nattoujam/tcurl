@@ -1,8 +1,9 @@
 [tool.poetry]
-name = "tcurl"
+name = "tappet"
 version = "0.1.0"
 description = "TUI HTTP Client with request management"
-authors = ["Your Name <you@example.com>"]
+authors = ["nattoujam <public.kyuuanago@gmail.com>"]
+license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -13,7 +14,7 @@ pyyaml = "^6.0.1"
 pyperclip = "^1.8.2"
 
 [tool.poetry.scripts]
-tcurl = "tcurl.cli:main"
+tappet = "tappet.cli:main"
 
 [build-system]
 requires = ["poetry-core"]
