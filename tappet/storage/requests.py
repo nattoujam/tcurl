@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 import yaml
 
-from tappet.models import RequestSet, Variable
+from tappet.models import RequestSet
 from tappet.storage.config import ensure_config
 from tappet.storage.paths import REQUESTS_DIR
 
@@ -19,10 +19,6 @@ SAMPLE_REQUEST = {
         "name": "$1",
         "email": "$2",
     },
-    "variables": [
-        {"name": "Name", "placeholder": "e.g. Jane Doe"},
-        {"name": "Email", "placeholder": "e.g. jane@example.com"},
-    ],
 }
 
 
@@ -88,8 +84,6 @@ def _parse_request_set(data: Dict[str, Any], path: Path) -> RequestSet:
     else:
         body = {}
 
-    variables = _parse_variables(data.get("variables"))
-
     return RequestSet(
         name=name,
         method=method,
@@ -97,25 +91,8 @@ def _parse_request_set(data: Dict[str, Any], path: Path) -> RequestSet:
         headers=headers,
         body=body,
         description=str(data.get("description") or ""),
-        variables=variables,
         file_path=path,
     )
-
-
-def _parse_variables(raw_vars: Any) -> List[Variable]:
-    if not isinstance(raw_vars, list):
-        return []
-
-    variables: List[Variable] = []
-    for item in raw_vars:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "")
-        placeholder = str(item.get("placeholder") or "")
-        if not (name or placeholder):
-            continue
-        variables.append(Variable(name=name, placeholder=placeholder))
-    return variables
 
 
 def _next_request_path() -> Path:
