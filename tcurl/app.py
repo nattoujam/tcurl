@@ -145,10 +145,10 @@ class DetailPanelWidget(Container):
         with TabbedContent(id="detail-tabs", initial="detail-tab-info"):
             with TabPane("Info", id="detail-tab-info"):
                 yield VerticalScroll(Static(id="detail-info"))
-            with TabPane("Request Headers", id="detail-tab-headers"):
-                yield VerticalScroll(Static(id="detail-headers"))
             with TabPane("Request Body", id="detail-tab-body"):
                 yield VerticalScroll(Static(id="detail-body"))
+            with TabPane("Request Headers", id="detail-tab-headers"):
+                yield VerticalScroll(Static(id="detail-headers"))
 
     def on_mount(self) -> None:
         tabbed = self.query_one(TabbedContent)
@@ -172,7 +172,7 @@ class DetailPanelWidget(Container):
         self._switch_tab(-1)
 
     def _switch_tab(self, offset: int) -> None:
-        tab_ids = ("detail-tab-info", "detail-tab-headers", "detail-tab-body")
+        tab_ids = ("detail-tab-info", "detail-tab-body", "detail-tab-headers")
         tabbed = self.query_one(TabbedContent)
         active_id = tabbed.active
         current_index = tab_ids.index(active_id) if active_id in tab_ids else 0
@@ -208,12 +208,18 @@ class DetailPanelWidget(Container):
         return "(empty)"
 
 
-class ResponsePanelWidget(VerticalScroll):
+class ResponsePanelWidget(Container):
     can_focus = True
+    BINDINGS = [
+        ("h", "prev_tab", "Prev Tab"),
+        ("left", "prev_tab", "Prev Tab"),
+        ("l", "next_tab", "Next Tab"),
+        ("right", "next_tab", "Next Tab"),
+    ]
     DEFAULT_CSS = """
     ResponsePanelWidget {
         border: solid gray;
-        padding: 1 2;
+        padding: 0 1;
     }
 
     ResponsePanelWidget:focus {
@@ -222,18 +228,47 @@ class ResponsePanelWidget(VerticalScroll):
     """
 
     def compose(self) -> ComposeResult:
-        yield Static(id="response-content")
+        with TabbedContent(id="response-tabs", initial="response-tab-main"):
+            with TabPane("Status/Body", id="response-tab-main"):
+                yield VerticalScroll(Static(id="response-main"))
+            with TabPane("Response Headers", id="response-tab-headers"):
+                yield VerticalScroll(Static(id="response-headers"))
+
+    def on_mount(self) -> None:
+        tabbed = self.query_one(TabbedContent)
+        tabbed.can_focus = False
+        for tabs in tabbed.query(Tabs):
+            tabs.can_focus = False
+        for tab in tabbed.query(Tab):
+            tab.can_focus = False
+        for scroll in tabbed.query(VerticalScroll):
+            scroll.can_focus = False
 
     def set_content(self, response: Optional[Response]) -> None:
-        self.query_one("#response-content", Static).update(self._format_response_details(response))
+        self.query_one("#response-main", Static).update(self._format_response_status_body(response))
+        self.query_one("#response-headers", Static).update(self._format_response_headers(response))
 
-    def _format_response_details(self, response: Optional[Response]) -> str:
+    def action_next_tab(self) -> None:
+        self._switch_tab(1)
+
+    def action_prev_tab(self) -> None:
+        self._switch_tab(-1)
+
+    def _switch_tab(self, offset: int) -> None:
+        tab_ids = ("response-tab-main", "response-tab-headers")
+        tabbed = self.query_one(TabbedContent)
+        active_id = tabbed.active
+        current_index = tab_ids.index(active_id) if active_id in tab_ids else 0
+        next_index = (current_index + offset) % len(tab_ids)
+        tabbed.active = tab_ids[next_index]
+
+    def _format_response_status_body(self, response: Optional[Response]) -> str:
         if response is None:
-            return "Response\n\n(not run)"
+            return "(not run)"
         if response.note:
-            return f"Response\n\n{response.note}"
+            return response.note
         if response.error:
-            return f"Response\n\nError: {response.error}"
+            return f"Error: {response.error}"
         body_text = self._format_response_body(response)
         status_line = "Status: (unknown)"
         if response.status_code is not None:
@@ -242,17 +277,13 @@ class ResponsePanelWidget(VerticalScroll):
             if response.elapsed_ms is not None:
                 elapsed = f" ({response.elapsed_ms:.0f} ms)"
             status_line = f"Status: {response.status_code}{reason}{elapsed}"
+        return f"{status_line}\n\n{body_text}"
+
+    def _format_response_headers(self, response: Optional[Response]) -> str:
+        if response is None:
+            return "(none)"
         headers_text = "\n".join(f"{key}: {value}" for key, value in (response.headers or {}).items())
-        if not headers_text:
-            headers_text = "(none)"
-        return (
-            "Response\n\n"
-            f"{status_line}\n\n"
-            "[Headers]\n"
-            f"{headers_text}\n\n"
-            "[Body]\n"
-            f"{body_text}"
-        )
+        return headers_text if headers_text else "(none)"
 
     def _format_response_body(self, response: Response) -> str:
         body_text = response.body if response.body else ""
