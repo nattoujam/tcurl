@@ -1,12 +1,13 @@
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Static
+from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, Static, TabbedContent, TabPane, Tab, Tabs
 
 from tcurl.http_client import execute_request
 from tcurl.models import RequestSet, Response
@@ -26,12 +27,11 @@ class RequestListWidget(ListView):
     ]
     DEFAULT_CSS = """
     RequestListWidget {
-        width: 30%;
-        border: solid green;
+        border: solid gray;
     }
 
     RequestListWidget:focus {
-        border: solid yellow;
+        border: solid magenta;
     }
     """
 
@@ -122,57 +122,102 @@ class RequestListWidget(ListView):
             app.refresh(layout=True)
 
 
-class DetailPanelWidget(Static):
+class DetailPanelWidget(Container):
     can_focus = True
+    BINDINGS = [
+        ("h", "prev_tab", "Prev Tab"),
+        ("left", "prev_tab", "Prev Tab"),
+        ("l", "next_tab", "Next Tab"),
+        ("right", "next_tab", "Next Tab"),
+    ]
     DEFAULT_CSS = """
     DetailPanelWidget {
-        border: solid blue;
-        padding: 1 2;
+        border: solid gray;
+        padding: 0 1;
     }
 
     DetailPanelWidget:focus {
-        border: solid yellow;
+        border: solid magenta;
     }
     """
 
-    def set_content(self, request_set: Optional[RequestSet]) -> None:
-        if request_set is None:
-            self.update("Request Details\n\n(No request selected)")
-            return
-        self.update(self._format_request_details(request_set))
+    def compose(self) -> ComposeResult:
+        with TabbedContent(id="detail-tabs", initial="detail-tab-info"):
+            with TabPane("Info", id="detail-tab-info"):
+                yield VerticalScroll(Static(id="detail-info"))
+            with TabPane("Request Headers", id="detail-tab-headers"):
+                yield VerticalScroll(Static(id="detail-headers"))
+            with TabPane("Request Body", id="detail-tab-body"):
+                yield VerticalScroll(Static(id="detail-body"))
 
-    def _format_request_details(self, request_set: RequestSet) -> str:
-        headers_text = "\n".join(f"{key}: {value}" for key, value in request_set.headers.items())
-        if not headers_text:
-            headers_text = "(none)"
-        if request_set.body:
-            body_text = json.dumps(request_set.body, indent=2, ensure_ascii=False)
-        else:
-            body_text = "(empty)"
+    def on_mount(self) -> None:
+        tabbed = self.query_one(TabbedContent)
+        tabbed.can_focus = False
+        for tabs in tabbed.query(Tabs):
+            tabs.can_focus = False
+        for tab in tabbed.query(Tab):
+            tab.can_focus = False
+        for scroll in tabbed.query(VerticalScroll):
+            scroll.can_focus = False
+
+    def set_content(self, request_set: Optional[RequestSet]) -> None:
+        self.query_one("#detail-info", Static).update(self._format_request_info(request_set))
+        self.query_one("#detail-headers", Static).update(self._format_request_headers(request_set))
+        self.query_one("#detail-body", Static).update(self._format_request_body(request_set))
+
+    def action_next_tab(self) -> None:
+        self._switch_tab(1)
+
+    def action_prev_tab(self) -> None:
+        self._switch_tab(-1)
+
+    def _switch_tab(self, offset: int) -> None:
+        tab_ids = ("detail-tab-info", "detail-tab-headers", "detail-tab-body")
+        tabbed = self.query_one(TabbedContent)
+        active_id = tabbed.active
+        current_index = tab_ids.index(active_id) if active_id in tab_ids else 0
+        next_index = (current_index + offset) % len(tab_ids)
+        tabbed.active = tab_ids[next_index]
+
+    def _format_request_info(self, request_set: Optional[RequestSet]) -> Union[Text, str]:
+        if request_set is None:
+            return "(No request selected)"
         description = request_set.description if request_set.description else "-"
-        return (
-            "Request Details\n\n"
-            f"Name: {request_set.name}\n"
-            f"Method: {request_set.method}\n"
-            f"URL: {request_set.url}\n"
-            f"Description: {description}\n\n"
-            "[Headers]\n"
-            f"{headers_text}\n\n"
-            "[Body]\n"
-            f"{body_text}"
-        )
+        method_text = request_set.method.upper()
+        method_color = {"GET": "green", "POST": "yellow"}.get(method_text)
+        text = Text()
+        if method_color:
+            text.append(method_text, style=method_color)
+        else:
+            text.append(method_text)
+        text.append(f" {request_set.url}\n")
+        text.append(description)
+        return text
+
+    def _format_request_headers(self, request_set: Optional[RequestSet]) -> str:
+        if request_set is None:
+            return "(none)"
+        headers_text = "\n".join(f"{key}: {value}" for key, value in request_set.headers.items())
+        return headers_text if headers_text else "(none)"
+
+    def _format_request_body(self, request_set: Optional[RequestSet]) -> str:
+        if request_set is None:
+            return "(empty)"
+        if request_set.body:
+            return json.dumps(request_set.body, indent=2, ensure_ascii=False)
+        return "(empty)"
 
 
 class ResponsePanelWidget(VerticalScroll):
     can_focus = True
     DEFAULT_CSS = """
     ResponsePanelWidget {
-        border: solid cyan;
+        border: solid gray;
         padding: 1 2;
     }
 
     ResponsePanelWidget:focus {
-        border: solid yellow;
+        border: solid magenta;
     }
     """
 
@@ -316,9 +361,13 @@ class TcurlApp(App):
         height: 1fr;
     }
 
+    #left-panel {
+        width: 1fr;
+    }
+
     #right-panel {
-        width: 70%;
         layout: vertical;
+        width: 3fr;
         height: 1fr;
     }
 
@@ -327,7 +376,7 @@ class TcurlApp(App):
     }
 
     #response-panel {
-        height: 1fr;
+        height: 2fr;
     }
     """
 
@@ -342,7 +391,7 @@ class TcurlApp(App):
         yield Header()
         yield Container(
             Horizontal(
-                RequestListWidget(self.store, id="request-list"),
+                RequestListWidget(self.store, id="left-panel"),
                 Container(
                     DetailPanelWidget(id="detail-panel"),
                     ResponsePanelWidget(id="response-panel"),
