@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -45,14 +46,31 @@ def load_request_sets() -> List[RequestSet]:
     return request_sets
 
 
-def create_request_set() -> RequestSet:
+def create_request_set() -> Optional[RequestSet]:
     ensure_requests_dir()
-    file_path = _next_request_path()
+    file_path = _next_path()
+    if file_path is None:
+        return None
     file_path.write_text(
         yaml.safe_dump(SAMPLE_REQUEST, sort_keys=False),
         encoding="utf-8",
     )
     return _parse_request_set(SAMPLE_REQUEST, file_path)
+
+
+def duplicate_request_set(request_set: RequestSet) -> Optional[RequestSet]:
+    ensure_requests_dir()
+    if request_set.file_path is None or not request_set.file_path.exists():
+        return None
+    source = request_set.file_path
+    file_path = _next_path()
+    if file_path is None:
+        return None
+    file_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    data = _read_yaml(file_path)
+    if not isinstance(data, dict):
+        data = {}
+    return _parse_request_set(data, file_path)
 
 
 def delete_request_set(request_set: RequestSet) -> bool:
@@ -95,13 +113,9 @@ def _parse_request_set(data: Dict[str, Any], path: Path) -> RequestSet:
     )
 
 
-def _next_request_path() -> Path:
-    base = REQUESTS_DIR / "new_request.yaml"
-    if not base.exists():
-        return base
-    counter = 1
-    while True:
-        candidate = REQUESTS_DIR / f"new_request_{counter}.yaml"
-        if not candidate.exists():
-            return candidate
-        counter += 1
+def _next_path() -> Optional[Path]:
+    stamp = time.time_ns() // 1_000_000
+    next_path = REQUESTS_DIR / f"{stamp}.yaml"
+    if next_path.exists():
+        return None
+    return next_path

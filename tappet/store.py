@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from tappet.models import RequestSet, Response
-from tappet.storage.requests import create_request_set, delete_request_set, load_request_sets
+from tappet.storage.requests import create_request_set, delete_request_set, duplicate_request_set, load_request_sets
 
 
 StoreCallback = Callable[[Optional[RequestSet]], None]
@@ -38,8 +38,19 @@ class RequestSetStore:
         self._notify_items(self.selected_set)
         self._notify_selection(self.selected_set)
 
-    def create(self) -> RequestSet:
+    def create(self) -> Optional[RequestSet]:
         created = create_request_set()
+        if created is None:
+            return None
+        self.refresh(select_set=created)
+        return created
+
+    def copy(self, request_set: RequestSet) -> Optional[RequestSet]:
+        if not self._is_in_items(request_set):
+            return None
+        created = duplicate_request_set(request_set)
+        if created is None:
+            return None
         self.refresh(select_set=created)
         return created
 

@@ -21,6 +21,7 @@ class RequestListWidget(ListView):
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         ("n", "new_request", "New"),
+        ("c", "copy_request", "Copy"),
         ("d", "delete_request", "Delete"),
         ("e", "edit_request", "Edit"),
         ("enter", "run_request", "Run"),
@@ -75,6 +76,12 @@ class RequestListWidget(ListView):
 
     def action_new_request(self) -> None:
         self.store.create()
+
+    def action_copy_request(self) -> None:
+        request_set = self.store.get_selected()
+        if request_set is None:
+            return
+        self.store.copy(request_set)
 
     def action_delete_request(self) -> None:
         request_set = self.store.get_selected()
