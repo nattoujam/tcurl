@@ -12,6 +12,7 @@ from textual.widgets import Button, Footer, Header, Label, ListItem, ListView, S
 from tappet.http_client import execute_request
 from tappet.models import RequestSet, Response
 from tappet.store import RequestSetStore
+from tappet.utils.clipboard import copy_to_clipboard
 from tappet.utils.editor import open_in_editor
 
 
@@ -203,7 +204,12 @@ class ResponsePanelWidget(Container):
         ("left", "prev_tab", "Prev Tab"),
         ("l", "next_tab", "Next Tab"),
         ("right", "next_tab", "Next Tab"),
+        ("c", "copy_response_body", "Copy Body"),
     ]
+
+    def __init__(self, store: RequestSetStore, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.store = store
 
     def compose(self) -> ComposeResult:
         with TabbedContent(id="response-tabs", initial="response-tab-main"):
@@ -231,6 +237,15 @@ class ResponsePanelWidget(Container):
 
     def action_prev_tab(self) -> None:
         self._switch_tab(-1)
+
+    def action_copy_response_body(self) -> None:
+        request_set = self.store.get_selected()
+        if request_set is None:
+            return
+        response = self.store.get_response(request_set)
+        if response is None:
+            return
+        copy_to_clipboard(response.body)
 
     def _switch_tab(self, offset: int) -> None:
         tab_ids = ("response-tab-main", "response-tab-headers")
@@ -343,7 +358,7 @@ class TcurlApp(App):
                 RequestListWidget(self.store, id="left-panel"),
                 Container(
                     DetailPanelWidget(id="detail-panel"),
-                    ResponsePanelWidget(id="response-panel"),
+                    ResponsePanelWidget(self.store, id="response-panel"),
                     id="right-panel",
                 ),
                 id="main",
